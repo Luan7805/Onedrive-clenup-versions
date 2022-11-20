@@ -24,7 +24,7 @@ function get_folder_id {
     jq -r '.id' |
     tr -d '"' |
     while read -r ID; do
-      list_dir "$ID" "$FOLDER_LOCATION"
+      list_dir "$FOLDER_LOCATION" "https://graph.microsoft.com/v1.0/drives/${DRIVE_ID}/items/${ID}/children"
     done
 }
 
@@ -33,23 +33,31 @@ function list_dir {
   rclone about "${REMOTE}:" >/dev/null 2>&1
   ACCESS_TOKEN="$(rclone config dump | jq -r --arg remote "$REMOTE" '.[$remote].token | fromjson | .access_token')"
 
-  ITEM_ID="$1"
-  FOLDER_NAME="$2"
+  FOLDER_NAME="$1"
+  URL="$2"
 
   echo -e "Listing directory: ${FOLDER_NAME}"
-  curl -s \
+
+  RESPONSE=$(curl -s \
     -X 'GET' \
     -H "Authorization: Bearer ${ACCESS_TOKEN}" \
     -H 'Accept: application/json' \
-    "https://graph.microsoft.com/v1.0/drives/${DRIVE_ID}/items/${ITEM_ID}/children" |
+    "${URL}")
+
+  echo "$RESPONSE" |
     jq -r '.value[] | "\(if (.file != null) then "file" else "directory" end) \(.id) \(.name)"' |
     while read -r TYPE ID NAME; do
       if [[ "$TYPE" == "file" ]]; then
         get_versions "$ID" "$NAME"
       else
-        list_dir "$ID" "$FOLDER_NAME/$NAME"
+        list_dir "$FOLDER_NAME/$NAME" "https://graph.microsoft.com/v1.0/drives/${DRIVE_ID}/items/${ID}/children"
       fi
     done
+
+  NEXT_URL=$(echo "$RESPONSE" | jq -r '.["@odata.nextLink"]')
+  if [[ "$NEXT_URL" != "null" ]]; then
+    list_dir "$FOLDER_NAME" "$NEXT_URL"
+  fi
 }
 
 # Find all versions of a file and delete whichever is greater than the number of versions to keep
